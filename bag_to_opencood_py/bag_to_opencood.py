@@ -12,8 +12,8 @@ import open3d as o3d
 from sensor_msgs_py import point_cloud2 as pc2
 
 """
-This node subscribes to a relative pose and lidar topics and synchronizes the messages using Approximate Time Synchronizer.
-The synchronized messages are saved to a YAML file and the lidar point cloud is saved to a PCD file in OpenCood format.
+This node subscribes to a relative pose and lidar topics from two vehicles and synchronizes the messages using Approximate Time Synchronizer.
+The synchronized relative pose messages are saved as YAML files and the lidar point clouds are saved as PCD files in OpenCood format.
 Run this node and play the merged pose and lidar bag file using the following command:
 ```ros2 bag play /workspace/merged_bag/merged_bag_0.db3 --clock -p -r 0.2```
 """
@@ -22,22 +22,29 @@ class SyncAndWriteNode(Node):
         super().__init__('sync_and_write_node')
         self.get_logger().info('Sync and Write Node has started!')
     
-        self.declare_parameter('output_directory', '/workspace/synchronized_poses/2024-03-19-14-18-43/0')
-        self.declare_parameter('lidar_topic', '/ouster/points')
-        self.declare_parameter('pose_topic', '/pose')
+        self.declare_parameter('output_directory', '/workspace/v2v_dataset/2024-03-19-14-18-43/')
+        self.declare_parameter('lidar_topic1', '/ouster/points/kia1')
+        self.declare_parameter('pose_topic1', '/pose/kia1')
+        self.declare_parameter('lidar_topic2', '/ouster/points/kia2')
+        self.declare_parameter('pose_topic2', '/pose/kia2')
         self.output_directory = self.get_parameter('output_directory').get_parameter_value().string_value
-        self.lidar_topic = self.get_parameter('lidar_topic').get_parameter_value().string_value
-        self.pose_topic = self.get_parameter('pose_topic').get_parameter_value().string_value
+        self.lidar_topic1 = self.get_parameter('lidar_topic1').get_parameter_value().string_value
+        self.pose_topic1 = self.get_parameter('pose_topic1').get_parameter_value().string_value
+        self.lidar_topic2 = self.get_parameter('lidar_topic2').get_parameter_value().string_value
+        self.pose_topic2 = self.get_parameter('pose_topic2').get_parameter_value().string_value
 
-        # Create directory if it doesn't exist
-        os.makedirs(self.output_directory, exist_ok=True)
+        # Create directories if they don't exist
+        os.makedirs(os.path.join(self.output_directory, '0'), exist_ok=True)
+        os.makedirs(os.path.join(self.output_directory, '1'), exist_ok=True)
 
         # Create subscribers
-        self.pose_sub = Subscriber(self, PoseStamped, self.pose_topic)
-        self.lidar_sub = Subscriber(self, PointCloud2, self.lidar_topic)
+        self.pose_sub1 = Subscriber(self, PoseStamped, self.pose_topic1)
+        self.lidar_sub1 = Subscriber(self, PointCloud2, self.lidar_topic1)
+        self.pose_sub2 = Subscriber(self, PoseStamped, self.pose_topic2)
+        self.lidar_sub2 = Subscriber(self, PointCloud2, self.lidar_topic2)
 
         # Set up the synchronization policy (Approximate Time Synchronizer)
-        self.ts = ApproximateTimeSynchronizer([self.pose_sub, self.lidar_sub], queue_size=10, slop=0.1)
+        self.ts = ApproximateTimeSynchronizer([self.pose_sub1, self.lidar_sub1, self.pose_sub2, self.lidar_sub2], queue_size=10, slop=1)
         self.ts.registerCallback(self.sync_callback)
         
         self.frame_count = 0
@@ -68,15 +75,8 @@ class SyncAndWriteNode(Node):
         o3d.io.write_point_cloud(file_name, o3d_cloud)
 
         return o3d_cloud
-
-    def sync_callback(self, pose_msg, lidar_msg):
-
-        lidar_time = lidar_msg.header.stamp.sec + lidar_msg.header.stamp.nanosec * 1e-9
-        pose_time = pose_msg.header.stamp.sec + pose_msg.header.stamp.nanosec * 1e-9
-        times = np.array([lidar_time, pose_time])
-        max_time_diff = np.max(times) - np.min(times)
-        print(f"Frame {self.frame_count} - Max time diff {max_time_diff}")
-
+    
+    def save_yaml(self, pose_msg, file_name):
         # Extract timestamp from the pose message
         timestamp = f"{pose_msg.header.stamp.sec}.{pose_msg.header.stamp.nanosec:09d}"
         # Convert pose message to a 4x4 transformation matrix
@@ -92,18 +92,31 @@ class SyncAndWriteNode(Node):
             'timestamp': timestamp
         }
 
-        # Generate the file name based on the timestamp
-        file_name = os.path.join(self.output_directory, f"{self.frame_count:06d}.yaml")
-
         # Write to YAML file
         with open(file_name, 'w') as yaml_file:
             yaml.dump(yaml_dict, yaml_file,  default_flow_style=False)
+        
+        return yaml_dict
 
-        # Save the point cloud to a PCD file
-        pcd_file_name = os.path.join(self.output_directory, f"{self.frame_count:06d}.pcd")
-        self.save_pcd(lidar_msg, pcd_file_name)
+    def sync_callback(self, pose_msg1, lidar_msg1, pose_msg2, lidar_msg2):
 
-        self.get_logger().info(f'Wrote synchronized pose to {file_name}')
+        lidar_time1 = lidar_msg1.header.stamp.sec + lidar_msg1.header.stamp.nanosec * 1e-9
+        pose_time1 = pose_msg1.header.stamp.sec + pose_msg1.header.stamp.nanosec * 1e-9
+        lidar_time2 = lidar_msg2.header.stamp.sec + lidar_msg2.header.stamp.nanosec * 1e-9
+        pose_time2 = pose_msg2.header.stamp.sec + pose_msg2.header.stamp.nanosec * 1e-9
+
+        times = np.array([lidar_time1, pose_time1, lidar_time2, pose_time2])
+        max_time_diff = np.max(times) - np.min(times)
+        print(f"Frame {self.frame_count} - Max time diff {max_time_diff}")
+
+        self.save_yaml(pose_msg1, os.path.join(self.output_directory, '0', f"{self.frame_count:06d}.yaml"))
+        self.save_yaml(pose_msg2, os.path.join(self.output_directory, '1', f"{self.frame_count:06d}.yaml"))
+        
+        self.save_pcd(lidar_msg1, os.path.join(self.output_directory, '0', f"{self.frame_count:06d}.pcd"))
+        self.save_pcd(lidar_msg2, os.path.join(self.output_directory, '1', f"{self.frame_count:06d}.pcd"))
+
+        self.get_logger().info(f"Frame {self.frame_count} saved.")
+
         self.frame_count += 1
     
 
