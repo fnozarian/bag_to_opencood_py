@@ -1,4 +1,5 @@
 import os
+import subprocess
 import yaml
 import numpy as np
 import rclpy
@@ -6,7 +7,6 @@ from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import PointCloud2
 from message_filters import ApproximateTimeSynchronizer, Subscriber
-from rclpy.time import Time
 from transforms3d import euler
 import open3d as o3d
 from sensor_msgs_py import point_cloud2 as pc2
@@ -20,14 +20,17 @@ Run this node and play the merged pose and lidar bag file using the following co
 class SyncAndWriteNode(Node):
     def __init__(self):
         super().__init__('sync_and_write_node')
+        
         self.get_logger().info('Sync and Write Node has started!')
-    
+        self.set_parameters([rclpy.parameter.Parameter('use_sim_time', rclpy.Parameter.Type.BOOL, True)])
         self.declare_parameter('output_directory', '/workspace/v2v_dataset/2024-03-19-14-18-43/')
+        self.declare_parameter('input_bag', '/workspace/htw_rosbag/V2X/v2x_bag.db3')
         self.declare_parameter('lidar_topic1', '/ouster/points/kia1')
         self.declare_parameter('pose_topic1', '/pose/kia1')
         self.declare_parameter('lidar_topic2', '/ouster/points/kia2')
         self.declare_parameter('pose_topic2', '/pose/kia2')
         self.output_directory = self.get_parameter('output_directory').get_parameter_value().string_value
+        self.input_bag = self.get_parameter('input_bag').get_parameter_value().string_value
         self.lidar_topic1 = self.get_parameter('lidar_topic1').get_parameter_value().string_value
         self.pose_topic1 = self.get_parameter('pose_topic1').get_parameter_value().string_value
         self.lidar_topic2 = self.get_parameter('lidar_topic2').get_parameter_value().string_value
@@ -44,10 +47,20 @@ class SyncAndWriteNode(Node):
         self.lidar_sub2 = Subscriber(self, PointCloud2, self.lidar_topic2)
 
         # Set up the synchronization policy (Approximate Time Synchronizer)
-        self.ts = ApproximateTimeSynchronizer([self.pose_sub1, self.lidar_sub1, self.pose_sub2, self.lidar_sub2], queue_size=10, slop=1)
+        self.ts = ApproximateTimeSynchronizer([self.pose_sub1, self.lidar_sub1, self.pose_sub2, self.lidar_sub2], queue_size=50, slop=1)
         self.ts.registerCallback(self.sync_callback)
-        
+
         self.frame_count = 0
+
+        self.play_bag_file(self.input_bag)
+
+    def play_bag_file(self, bag_path):
+        command = ['ros2', 'bag', 'play', bag_path, '--clock', '-d', '2', '-r', '0.2']
+        self.bag_process = subprocess.Popen(command)
+        self.get_logger().info(f"Playing bag file: {bag_path}")
+
+    # def clock_callback(self, msg):
+    #     self.get_logger().info(f"Clock: {msg.clock}")    
     
     def save_pcd(self, pc_msg, file_name):
         # Extract points and intensity from ROS point cloud
@@ -107,7 +120,12 @@ class SyncAndWriteNode(Node):
 
         times = np.array([lidar_time1, pose_time1, lidar_time2, pose_time2])
         max_time_diff = np.max(times) - np.min(times)
-        print(f"Frame {self.frame_count} - Max time diff {max_time_diff}")
+        self.get_logger().info(f"Pose 1 time {pose_time1}")
+        self.get_logger().info(f"Lidar 1 time {lidar_time1}")
+        self.get_logger().info(f"Pose 2 time {pose_time2}")
+        self.get_logger().info(f"Lidar 2 time {lidar_time2}")
+        self.get_logger().info(f"Frame {self.frame_count} - Max time diff {max_time_diff}")
+        self.get_logger().info(f"===============================================")
 
         self.save_yaml(pose_msg1, os.path.join(self.output_directory, '0', f"{self.frame_count:06d}.yaml"))
         self.save_yaml(pose_msg2, os.path.join(self.output_directory, '1', f"{self.frame_count:06d}.yaml"))
@@ -119,6 +137,10 @@ class SyncAndWriteNode(Node):
 
         self.frame_count += 1
     
+    def __del__(self):
+        if hasattr(self, 'bag_process'):
+            self.bag_process.terminate()
+            self.get_logger().info("Bag file playback terminated")
 
     def pose_to_matrix(self, pose_msg):
         """Converts a PoseStamped message to a 4x4 transformation matrix."""
