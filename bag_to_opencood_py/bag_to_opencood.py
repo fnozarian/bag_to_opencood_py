@@ -47,7 +47,7 @@ class SyncAndWriteNode(Node):
         self.lidar_sub2 = Subscriber(self, PointCloud2, self.lidar_topic2)
 
         # Set up the synchronization policy (Approximate Time Synchronizer)
-        self.ts = ApproximateTimeSynchronizer([self.pose_sub1, self.lidar_sub1, self.pose_sub2, self.lidar_sub2], queue_size=50, slop=1)
+        self.ts = ApproximateTimeSynchronizer([self.pose_sub1, self.lidar_sub1, self.pose_sub2, self.lidar_sub2], queue_size=50, slop=0.1)
         self.ts.registerCallback(self.sync_callback)
 
         self.frame_count = 0
@@ -127,11 +127,11 @@ class SyncAndWriteNode(Node):
         self.get_logger().info(f"Frame {self.frame_count} - Max time diff {max_time_diff}")
         self.get_logger().info(f"===============================================")
 
-        self.save_yaml(pose_msg1, os.path.join(self.output_directory, '0', f"{self.frame_count:06d}.yaml"))
-        self.save_yaml(pose_msg2, os.path.join(self.output_directory, '1', f"{self.frame_count:06d}.yaml"))
+        self.save_yaml(pose_msg1, os.path.join(self.output_directory, '1', f"{self.frame_count:06d}.yaml"))
+        self.save_yaml(pose_msg2, os.path.join(self.output_directory, '0', f"{self.frame_count:06d}.yaml"))
         
-        self.save_pcd(lidar_msg1, os.path.join(self.output_directory, '0', f"{self.frame_count:06d}.pcd"))
-        self.save_pcd(lidar_msg2, os.path.join(self.output_directory, '1', f"{self.frame_count:06d}.pcd"))
+        self.save_pcd(lidar_msg1, os.path.join(self.output_directory, '1', f"{self.frame_count:06d}.pcd"))
+        self.save_pcd(lidar_msg2, os.path.join(self.output_directory, '0', f"{self.frame_count:06d}.pcd"))
 
         self.get_logger().info(f"Frame {self.frame_count} saved.")
 
